@@ -247,6 +247,42 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                 let mut save_preset = false;
                 let fx_id = e.effect.clone();
                 resp.context_menu(|ui| {
+                    let copy_effect = !def.intrinsic && !filmcraft_project::graphic::is_layer_id(&e.effect);
+                    let copy = ui.add_enabled(copy_effect, egui::Button::new(tl!("Copy Effect")));
+                    app.auto.add(&format!("effectControls.effect.{fx_id}.{}.{}.copy", clip.0, idx), copy.rect, "Copy Effect");
+                    if copy.clicked() {
+                        actions.push(("effects.copy".into(), json!({"clip": clip.0, "index": idx})));
+                        ui.close();
+                    }
+                    let copy_settings = !filmcraft_project::graphic::is_layer_id(&e.effect);
+                    let copy = ui.add_enabled(copy_settings, egui::Button::new(tl!("Copy Effect Settings")));
+                    app.auto.add(&format!("effectControls.effect.{fx_id}.{}.{}.copySettings", clip.0, idx), copy.rect, "Copy Effect Settings");
+                    if copy.clicked() {
+                        actions.push(("effects.copySettings".into(), json!({"clip": clip.0, "index": idx})));
+                        ui.close();
+                    }
+                    ui.separator();
+                    let paste_effect = app.session.state.effect_clipboard.as_ref().is_some_and(|copied| {
+                        copied.def().is_some_and(|d| {
+                            !d.intrinsic
+                                && !matches!(d.kind, filmcraft_project::EffectKind::VideoTransition | filmcraft_project::EffectKind::AudioTransition)
+                                && !filmcraft_project::graphic::is_layer_id(&copied.effect)
+                        }) && copied.def().is_some_and(|source| (*kind == TrackKind::Audio) == (source.kind == filmcraft_project::EffectKind::Audio))
+                    });
+                    let paste = ui.add_enabled(paste_effect, egui::Button::new(tl!("Paste Effect")));
+                    app.auto.add(&format!("effectControls.effect.{fx_id}.{}.{}.paste", clip.0, idx), paste.rect, "Paste Effect");
+                    if paste.clicked() {
+                        actions.push(("effects.paste".into(), json!({"clip": clip.0})));
+                        ui.close();
+                    }
+                    let paste_settings = app.session.state.effect_settings_clipboard.as_ref().is_some_and(|copied| copied.effect == e.effect);
+                    let paste = ui.add_enabled(paste_settings, egui::Button::new(tl!("Paste Effect Settings")));
+                    app.auto.add(&format!("effectControls.effect.{fx_id}.{}.{}.pasteSettings", clip.0, idx), paste.rect, "Paste Effect Settings");
+                    if paste.clicked() {
+                        actions.push(("effects.pasteSettings".into(), json!({"clip": clip.0, "index": idx})));
+                        ui.close();
+                    }
+                    ui.separator();
                     let sp = ui.button(tl!("Save Preset…"));
                     app.auto.add(&format!("effectControls.effect.{fx_id}.savePreset"), sp.rect, "Save Preset…");
                     if sp.clicked() {

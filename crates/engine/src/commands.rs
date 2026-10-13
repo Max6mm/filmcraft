@@ -122,6 +122,14 @@ fn has_clipboard(s: &Session) -> std::result::Result<(), String> {
     has_seq(s)?;
     if s.state.clipboard.is_empty() { Err("clipboard is empty".into()) } else { Ok(()) }
 }
+fn has_effect_clipboard(s: &Session) -> std::result::Result<(), String> {
+    has_seq(s)?;
+    if s.state.effect_clipboard.is_some() { Ok(()) } else { Err("copy an effect first".into()) }
+}
+fn has_effect_settings_clipboard(s: &Session) -> std::result::Result<(), String> {
+    has_seq(s)?;
+    if s.state.effect_settings_clipboard.is_some() { Ok(()) } else { Err("copy effect settings first".into()) }
+}
 
 /// The ids a caller named under `many` (a list) or `one` (a single id), when the command documents
 /// that key as ids (`"clips":[id]`, `"item":id`); `None` when it named none.
@@ -2919,6 +2927,111 @@ fn build() -> Vec<CommandSpec> {
             Ok(Value::Null)
         }),
         // ================= Effects =================
+        CommandSpec {
+            id: "effects.copy",
+            label: "Copy Effect",
+            menu: &[],
+            shortcut: None,
+            params: r#"{"clip":id,"index":n}"#,
+            enabled: has_seq,
+            run: |s, p| {
+                let c = clip_p(p, "clip").ok_or_else(|| bad("effects.copy", "need `clip`"))?;
+                let idx = u64_p(p, "index").and_then(|n| usize::try_from(n).ok()).ok_or_else(|| bad("effects.copy", "need a valid `index`"))?;
+                let effect = s
+                    .active_sequence()
+                    .and_then(|q| q.find_item(c))
+                    .and_then(|(_, it)| it.effects.get(idx))
+                    .filter(|e| e.def().is_some_and(|d| !d.intrinsic && !filmcraft_project::graphic::is_layer_id(&e.effect)))
+                    .cloned()
+                    .ok_or_else(|| bad("effects.copy", "no copyable effect at that index"))?;
+                s.state.effect_clipboard = Some(effect);
+                Ok(Value::Null)
+            },
+            journal: false,
+        },
+        CommandSpec {
+            id: "effects.copySettings",
+            label: "Copy Effect Settings",
+            menu: &[],
+            shortcut: None,
+            params: r#"{"clip":id,"index":n}"#,
+            enabled: has_seq,
+            run: |s, p| {
+                let c = clip_p(p, "clip").ok_or_else(|| bad("effects.copySettings", "need `clip`"))?;
+                let idx = u64_p(p, "index").and_then(|n| usize::try_from(n).ok()).ok_or_else(|| bad("effects.copySettings", "need a valid `index`"))?;
+                let effect = s
+                    .active_sequence()
+                    .and_then(|q| q.find_item(c))
+                    .and_then(|(_, it)| it.effects.get(idx))
+                    .filter(|e| e.def().is_some() && !filmcraft_project::graphic::is_layer_id(&e.effect))
+                    .cloned()
+                    .ok_or_else(|| bad("effects.copySettings", "no compatible effect at that index"))?;
+                s.state.effect_settings_clipboard = Some(effect);
+                Ok(Value::Null)
+            },
+            journal: false,
+        },
+        cmd!("effects.paste", "Paste Effect", [], None, r#"{"clip":id}"#, has_effect_clipboard, |s, p| {
+            let c = clip_p(p, "clip").ok_or_else(|| bad("effects.paste", "need `clip`"))?;
+            let effect = s.state.effect_clipboard.clone().ok_or_else(|| bad("effects.paste", "copy an effect first"))?;
+            let def = effect
+                .def()
+                .filter(|d| {
+                    !d.intrinsic
+                        && !matches!(d.kind, filmcraft_project::EffectKind::VideoTransition | filmcraft_project::EffectKind::AudioTransition)
+                        && !filmcraft_project::graphic::is_layer_id(d.id)
+                })
+                .ok_or_else(|| bad("effects.paste", "the copied effect cannot be pasted onto a clip"))?;
+            let q = s.active_sequence().ok_or(EngineError::NoSequence)?;
+            let (track, _) = q.find_item(c).ok_or(filmcraft_edit::EditError::NoItem(c))?;
+            let is_audio = q.track(track).is_some_and(|t| t.kind == TrackKind::Audio);
+            if is_audio != (def.kind == filmcraft_project::EffectKind::Audio) {
+                return Err(bad("effects.paste", "the copied effect is incompatible with this clip"));
+            }
+            s.edit_sequence("Paste Effect", |q, _, st| {
+                let is_audio = q.track(track).is_some_and(|t| t.kind == TrackKind::Audio);
+                if is_audio != (def.kind == filmcraft_project::EffectKind::Audio) {
+                    return Err(bad("effects.paste", "the copied effect is incompatible with this clip"));
+                }
+                let (_, it) = q.find_item_mut(c).ok_or(filmcraft_edit::EditError::NoItem(c))?;
+                let pos = if def.kind == filmcraft_project::EffectKind::Audio {
+                    it.effects.len()
+                } else {
+                    it.effects.iter().position(|e| e.def().is_some_and(|d| d.intrinsic)).unwrap_or(it.effects.len())
+                };
+                it.effects.insert(pos, effect.clone());
+                st.selected_effect = crate::EffectSel::of(c, &it.effects, pos);
+                Ok(pos)
+            })
+            .map(|index| json!({"index": index}))
+        }),
+        cmd!("effects.pasteSettings", "Paste Effect Settings", [], None, r#"{"clip":id,"index":n}"#, has_effect_settings_clipboard, |s, p| {
+            let c = clip_p(p, "clip").ok_or_else(|| bad("effects.pasteSettings", "need `clip`"))?;
+            let idx = u64_p(p, "index").and_then(|n| usize::try_from(n).ok()).ok_or_else(|| bad("effects.pasteSettings", "need a valid `index`"))?;
+            let copied = s.state.effect_settings_clipboard.as_ref().ok_or_else(|| bad("effects.pasteSettings", "copy effect settings first"))?;
+            let copied_id = copied.effect.clone();
+            let target = s
+                .active_sequence()
+                .and_then(|q| q.find_item(c))
+                .and_then(|(_, it)| it.effects.get(idx))
+                .ok_or_else(|| bad("effects.pasteSettings", "no effect at that index"))?;
+            if target.effect != copied_id {
+                return Err(bad("effects.pasteSettings", "settings can only be pasted onto the same effect type"));
+            }
+            let (enabled, params, masks) = (copied.enabled, copied.params.clone(), copied.masks.clone());
+            s.edit_sequence("Paste Effect Settings", |q, _, _| {
+                let (_, it) = q.find_item_mut(c).ok_or(filmcraft_edit::EditError::NoItem(c))?;
+                let target = it.effects.get_mut(idx).ok_or_else(|| bad("effects.pasteSettings", "no effect at that index"))?;
+                if target.effect != copied_id {
+                    return Err(bad("effects.pasteSettings", "settings can only be pasted onto the same effect type"));
+                }
+                target.enabled = enabled;
+                target.params = params;
+                target.masks = masks;
+                Ok(())
+            })?;
+            Ok(Value::Null)
+        }),
         cmd!("effects.apply", "Apply Effect", [], None, r#"{"clips":[id]?,"effect":"gaussian_blur|Gaussian Blur|…"}"#, has_seq, |s, p| {
             let name = str_p(p, "effect").ok_or_else(|| bad("effects.apply", "need `effect`"))?;
             let def = resolve_effect_name(s, p, name).ok_or_else(|| bad("effects.apply", format!("unknown effect `{name}`")))?;

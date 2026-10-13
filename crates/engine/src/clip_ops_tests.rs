@@ -199,6 +199,60 @@ fn paste_attributes_with_scaled_keyframes_and_remove_attributes() {
 }
 
 #[test]
+fn copy_effect_settings_replaces_only_matching_effect_settings() {
+    let mut s = demo();
+    let (source, target) = (v1(&s)[0].id, v1(&s)[2].id);
+    for id in [source, target] {
+        s.execute("effects.apply", json!({"clip": id.0, "effect": "gaussian_blur"})).unwrap();
+    }
+    let source_index = clip(&s, source.0).effects.iter().position(|e| e.effect == "gaussian_blur").unwrap();
+    let target_index = clip(&s, target.0).effects.iter().position(|e| e.effect == "gaussian_blur").unwrap();
+    s.execute("effects.setParam", json!({"clip": source.0, "effect": "gaussian_blur", "param": "blurriness", "value": 37.0})).unwrap();
+    s.execute("effects.setParam", json!({"clip": target.0, "effect": "gaussian_blur", "param": "blurriness", "value": 4.0})).unwrap();
+    s.execute("effects.toggleEnabled", json!({"clip": source.0, "index": source_index})).unwrap();
+    let source_before = clip(&s, source.0).effects[source_index].clone();
+    let undo_count = s.history.undo.len();
+    s.execute("effects.copySettings", json!({"clip": source.0, "index": source_index})).unwrap();
+    assert_eq!(s.history.undo.len(), undo_count, "copying is not a project edit");
+    s.execute("effects.pasteSettings", json!({"clip": target.0, "index": target_index})).unwrap();
+    let source_after = clip(&s, source.0).effects[source_index].clone();
+    let target_after = clip(&s, target.0).effects[target_index].clone();
+    assert_eq!(source_after, source_before, "the source stays untouched");
+    assert_eq!(target_after.enabled, source_before.enabled);
+    assert_eq!(target_after.params, source_before.params);
+    assert_eq!(target_after.masks, source_before.masks);
+
+    let motion_index = clip(&s, target.0).effects.iter().position(|e| e.effect == "motion").unwrap();
+    let before = clip(&s, target.0);
+    assert!(s.execute("effects.pasteSettings", json!({"clip": target.0, "index": motion_index})).is_err());
+    assert_eq!(clip(&s, target.0), before, "a different effect type is unchanged");
+}
+
+#[test]
+fn copy_and_paste_effect_clones_the_instance_and_is_undoable() {
+    let mut s = demo();
+    let (source, target) = (v1(&s)[0].id, v1(&s)[2].id);
+    s.execute("effects.apply", json!({"clip": source.0, "effect": "gaussian_blur"})).unwrap();
+    let source_index = clip(&s, source.0).effects.iter().position(|e| e.effect == "gaussian_blur").unwrap();
+    s.execute("effects.setParam", json!({"clip": source.0, "effect": "gaussian_blur", "param": "blurriness", "value": 37.0})).unwrap();
+    let source_before = clip(&s, source.0).effects[source_index].clone();
+    let undo_count = s.history.undo.len();
+    s.execute("effects.copy", json!({"clip": source.0, "index": source_index})).unwrap();
+    assert_eq!(s.history.undo.len(), undo_count, "copying is not a project edit");
+    let result = s.execute("effects.paste", json!({"clip": target.0})).unwrap();
+    let target_index = result["index"].as_u64().unwrap() as usize;
+    assert_eq!(clip(&s, target.0).effects[target_index], source_before);
+    assert_eq!(clip(&s, source.0).effects[source_index], source_before);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(clip(&s, target.0).effects.iter().all(|e| e.effect != "gaussian_blur"));
+    s.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(clip(&s, target.0).effects[target_index], source_before);
+
+    s.execute("effects.setParam", json!({"clip": target.0, "effect": "gaussian_blur", "param": "blurriness", "value": 12.0})).unwrap();
+    assert_eq!(clip(&s, source.0).effects[source_index], source_before, "editing the pasted copy cannot mutate the source");
+}
+
+#[test]
 fn remove_unused_and_consolidate_duplicates() {
     let mut s = demo();
     let n = s.project.items.len();

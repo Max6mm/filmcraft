@@ -3,6 +3,14 @@
 The egui frontend draws panels and dialogs, and dispatches project changes through the engine.
 Interactive controls keep stable automation ids regardless of the interface language.
 
+## Effect copy and paste
+
+Right-click an effect row in Effect Controls to copy the effect or its settings, then right-click
+an effect row on the destination clip to paste. Paste Effect adds an independent instance;
+Paste Effect Settings replaces the enabled state, parameters (including keyframes) and masks of
+the same effect type. The two session-only effect clipboards are separate from the Timeline clip
+clipboard.
+
 ## Transition drop previews
 
 Dragging a video or audio transition over a compatible clip shows its actual time span, the

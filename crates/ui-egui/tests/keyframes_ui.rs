@@ -520,6 +520,71 @@ fn shift_snaps_the_group_to_other_rows_at_different_lane_widths() {
 }
 
 #[test]
+fn effect_context_menu_copies_settings_and_pastes_a_full_effect() {
+    let (mut d, source) = Driver::demo();
+    let sequence = d.exec("sequence.inspect", json!({}));
+    let target_id = sequence["video"][0]["items"][2]["clip"].as_u64().unwrap();
+    d.exec("effects.apply", json!({"clip": source.id, "effect": "gaussian_blur"}));
+    d.exec("effects.apply", json!({"clip": target_id, "effect": "gaussian_blur"}));
+    d.exec("effects.setParam", json!({"clip": source.id, "effect": "gaussian_blur", "param": "blurriness", "value": 37.0}));
+    d.exec("effects.setParam", json!({"clip": target_id, "effect": "gaussian_blur", "param": "blurriness", "value": 4.0}));
+    let source_index = d
+        .harness
+        .state()
+        .session
+        .active_sequence()
+        .unwrap()
+        .find_item(ClipId(source.id))
+        .unwrap()
+        .1
+        .effects
+        .iter()
+        .position(|e| e.effect == "gaussian_blur")
+        .unwrap();
+    let target_index = d
+        .harness
+        .state()
+        .session
+        .active_sequence()
+        .unwrap()
+        .find_item(ClipId(target_id))
+        .unwrap()
+        .1
+        .effects
+        .iter()
+        .position(|e| e.effect == "gaussian_blur")
+        .unwrap();
+
+    d.right_click("effectControls.effect.gaussian_blur");
+    d.click(&format!("effectControls.effect.gaussian_blur.{}.{}.copySettings", source.id, source_index));
+    d.exec("timeline.select", json!({"clips": [target_id]}));
+    d.right_click("effectControls.effect.gaussian_blur");
+    d.click(&format!("effectControls.effect.gaussian_blur.{target_id}.{target_index}.pasteSettings"));
+    assert_eq!(d.parameter(&Clip { id: target_id, start: 0, duration: 0 }, "gaussian_blur", "blurriness").value.as_f64(), Some(37.0),);
+
+    d.exec("timeline.select", json!({"clips": [source.id]}));
+    d.right_click("effectControls.effect.gaussian_blur");
+    d.click(&format!("effectControls.effect.gaussian_blur.{}.{}.copy", source.id, source_index));
+    d.exec("timeline.select", json!({"clips": [target_id]}));
+    d.right_click("effectControls.effect.gaussian_blur");
+    d.click(&format!("effectControls.effect.gaussian_blur.{target_id}.{target_index}.paste"));
+    let pasted = d
+        .harness
+        .state()
+        .session
+        .active_sequence()
+        .unwrap()
+        .find_item(ClipId(target_id))
+        .unwrap()
+        .1
+        .effects
+        .iter()
+        .filter(|e| e.effect == "gaussian_blur")
+        .count();
+    assert_eq!(pasted, 2, "Paste Effect adds an independent instance");
+}
+
+#[test]
 fn shift_snaps_to_playhead_with_a_screen_space_threshold() {
     for (width, theme) in [(280.0, "dark"), (480.0, "light")] {
         let (mut d, clip) = Driver::demo();
